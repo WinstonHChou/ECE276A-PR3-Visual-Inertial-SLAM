@@ -173,4 +173,3 @@ cython_debug/
 # Project 3
 **/trainset/**
 **/testset/**
-*.docx
