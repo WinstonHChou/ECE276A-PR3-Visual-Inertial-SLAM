@@ -1,3 +1,4 @@
+import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
 from transforms3d.euler import mat2euler, euler2mat
@@ -261,6 +262,12 @@ def createPose(R, p):
   result = np.vstack((result, np.array([0,0,0,1])))
   return result
 
+### Stereo Camera
+transformCameraToOptical = np.array([[0,-1, 0,0],
+                                     [0, 0,-1,0],
+                                     [1, 0, 0,0],
+                                     [0, 0, 0,1]])
+
 def createStereoCalibrationMatrix(K_left, K_right, b):
   fsu_l, fsv_l, cu_l, cv_l = K_left[0,0], K_left[1,1], K_left[0,2], K_left[1,2]
   fsu_r, fsv_r, cu_r, cv_r = K_right[0,0], K_right[1,1], K_right[0,2], K_right[1,2]
@@ -270,27 +277,145 @@ def createStereoCalibrationMatrix(K_left, K_right, b):
                        [    0, fsv_r, cv_r,        0]])
   return M_stereo
 
-def getCameraFramePointFromPixelPair(feature, R, p_in, K): #feature is 4 x 1, R,p is from right camera to left camera
-  
-  K_inv = np.linalg.pinv(K)
+def getCameraFramePointFromPixelObservation(feature, M_stereo):
+  M_stereo_inv = np.linalg.pinv(M_stereo)
+  z = np.atleast_2d(np.hstack(feature)).transpose()
+  z = M_stereo_inv @ z
+  disparity = 1 / z[3]
+  m_CameraFrame = inversePose(transformCameraToOptical) @ (z * disparity)
+  return m_CameraFrame
 
-  e3 = np.array([[0,0,1]]).transpose()
-  z1 = np.atleast_2d(np.hstack((feature[:2],1))).transpose()
-  z2 = np.atleast_2d(np.hstack((feature[2:],1))).transpose()
+def firstTimeObserved(tracker, newObservationsBool):
+  """
+  returns True if landmark is observed for the first time
+  """
+  trackerInt = tracker.astype(int)
+  newObservationsBoolInt = newObservationsBool.astype(int)
+  firstTimeObserved = trackerInt - newObservationsBoolInt
+  return firstTimeObserved == -1
 
-  z1 = K_inv @ z1
-  z2 = K_inv @ z2
-  p = np.atleast_2d(p_in).transpose()
-  a = (R.transpose() @ p) - (e3.transpose() @ R.transpose() @ p) * z2
-  b = (R.transpose() @ z1) - (e3.transpose() @ R.transpose() @ z1) * z2
-  m = ((a.transpose() @ a) / (a.transpose() @ b)) * z1
+def featuresValid(features):
+  """
+  Determines if a landmark has been observed by checking if all its feature values are valid.
+    Input:
+        features (4 x N array): Matrix with 4 rows corresponding to u_L, v_L, u_R, v_R per feature.
+    Returns:
+        valid (1D array): Boolean array of size N indicating if each landmark has valid observations.
+  """
+  numOfLandmarks_t = int(features.shape[0] / 4)
+  featuresReshaped = features.reshape(numOfLandmarks_t,4)
+  featuresReshaped = featuresReshaped[:,0]
+  landmarkObserved = featuresReshaped != -1
+  return landmarkObserved
 
-  return m
+def convertNormalLandmarksToHomogenous(q):
+  numOfLandmarks_t = int(q.shape[0] / 3)
+  landmarks = q.reshape(numOfLandmarks_t,3)
+  landmarks = np.column_stack((landmarks, np.repeat(1, np.shape(landmarks)[0])))
+  landmarks = landmarks.reshape(numOfLandmarks_t * 4, 1)
+  return landmarks
+
+def convertHomogeneousLandmarksToNormal(q):
+  numOfLandmarks_t = int(q.shape[0] / 4)
+  landmarks = q.reshape(numOfLandmarks_t,4)
+  landmarks = landmarks[:,:3]
+  landmarks = landmarks.reshape(numOfLandmarks_t * 3, 1)
+  return landmarks
+
+def piProjection(q):
+  """
+  q is R3
+  """
+  q3 = q[2][0]
+  return (1/q3) * q
+
+def piProjectionLandmarksHomogeneous(q):
+  """
+  q is homogeneous coordinates
+  """
+  numOfLandmarks_t = int(q.shape[0] / 4)
+  landmarks = q.reshape(numOfLandmarks_t,4)
+  q3 = landmarks[:,2]
+  landmarks = landmarks.transpose()
+  result = np.atleast_2d((1 / q3)) * landmarks
+  result = result.transpose()
+  result = result.reshape(numOfLandmarks_t * 4, 1)
+  return result
+
+def observationModel(ImuToWorldPose, ImuToCameraFramePose, landmarkWorldCoords, stereoCalibMatrix, landmarkObservedInNewObservations):
+  numOfLandmarks_t = int(landmarkWorldCoords.shape[0] / 3)
+  landmarkWorldCoordsMasked = landmarkWorldCoords.reshape(numOfLandmarks_t, 3)
+  landmarkWorldCoordsMasked = landmarkWorldCoordsMasked[landmarkObservedInNewObservations, :]
+  landmarkWorldCoordsMasked = landmarkWorldCoordsMasked.reshape(-1,1)
+  numOfLandmarks_t = int(landmarkWorldCoordsMasked.shape[0] / 3)
+
+  mu = convertNormalLandmarksToHomogenous(landmarkWorldCoordsMasked)
+  T = scipy.linalg.block_diag(*([ImuToCameraFramePose @ np.linalg.pinv(ImuToWorldPose)]*numOfLandmarks_t))
+  K = scipy.linalg.block_diag(*([stereoCalibMatrix]*numOfLandmarks_t))
+  result = K @ piProjectionLandmarksHomogeneous(T @ mu)
+  return result
+
+def observationModelJacobianRespectToLandmarks(ImuToWorldPose, ImuToCameraFramePose, landmarkCoordsMeansPrior, stereoCalibMatrix, landmarkObservedInNewObservations):
+  newObservationsCount = np.count_nonzero(landmarkObservedInNewObservations == True)
+  numOfLandmarks_t = int(landmarkCoordsMeansPrior.shape[0] / 3)
+  H = np.zeros((4*newObservationsCount, 3*numOfLandmarks_t))
+  HRowTracker = 0
+  for i in range(numOfLandmarks_t):
+    if landmarkObservedInNewObservations[i]:
+      landmarkCoordMeanPrior = landmarkCoordsMeansPrior[3*i:3*i+3,:]
+      landmarkCoordMeanPrior = np.vstack((landmarkCoordMeanPrior,1))
+      H_i_i = stereoCameraJacobian(ImuToWorldPose, ImuToCameraFramePose, landmarkCoordMeanPrior, stereoCalibMatrix)
+      H[4*HRowTracker:4*HRowTracker+4,3*i:3*i+3] = H_i_i
+      HRowTracker = HRowTracker + 1
+  return H
+
+def observationModelJacobianRespectToPose(ImuToWorldPoseMeanPrior, ImuToCameraFramePose, landmarkCoords, stereoCalibMatrix, landmarkObservedInNewObservations):
+  newObservationsCount = np.count_nonzero(landmarkObservedInNewObservations == True)
+  numOfLandmarks_t = int(landmarkCoords.shape[0] / 3)
+  inverseImuToWorldPoseMeanPrior = np.linalg.pinv(ImuToWorldPoseMeanPrior)
+  H = np.zeros((4*newObservationsCount, 6))
+  HRowTracker = 0
+  for i in range(numOfLandmarks_t):
+    if landmarkObservedInNewObservations[i]:
+      landmarkCoord = landmarkCoords[3*i:3*i+3,:]
+      landmarkCoord = np.vstack((landmarkCoord,1))
+      H_t1_i = -stereoCalibMatrix @ derivativeProjectionFunction(ImuToCameraFramePose @ inverseImuToWorldPoseMeanPrior @ landmarkCoord) @ ImuToCameraFramePose @ odotMap(inverseImuToWorldPoseMeanPrior @ landmarkCoord)
+      H[4*HRowTracker:4*HRowTracker+4,:] = H_t1_i
+      HRowTracker = HRowTracker + 1
+  return H
+
+def odotMap(q):
+  s = q[:3,:]
+  result = np.zeros((4,6))
+  result[:3,:3] = np.eye(3)
+  result[:3,3:] = -hatmap(s.flatten())
+  return result
+
+def derivativeProjectionFunction(q):
+  """
+  q is homogeneous coordinates
+  """
+  q1 = q[0][0]
+  q2 = q[1][0]
+  q3 = q[2][0]
+  q4 = q[3][0]
+  result = (1 / q3) * np.array([[1,0,-q1/q3,0],[0,1,-q2/q3,0],[0,0,0,0],[0,0,-q4/q3,1]])
+  return result
+
+def stereoCameraJacobian(ImuToWorldPose, ImuToCameraFramePose, landmarkWorldCoord, stereoCalibMatrix):
+  P = np.array([[1,0,0,0],
+                [0,1,0,0],
+                [0,0,1,0]])
+  worldToImuPose = np.linalg.pinv(ImuToWorldPose)
+  d_proj = derivativeProjectionFunction(transformCameraToOptical @ ImuToCameraFramePose @ worldToImuPose @ landmarkWorldCoord)
+  result = stereoCalibMatrix @ d_proj @ transformCameraToOptical @ ImuToCameraFramePose @ worldToImuPose @ P.transpose()
+  return result
 
 class ExtentedKalmanFilterInertial:
-  def __init__(self, stereoCalibrationMatrix, initialPose = np.eye(4)):
+  def __init__(self, stereoCalibrationMatrix, ImuToCameraFramePose, initialPose = np.eye(4)):
     self.initialPose = initialPose
     self.stereoCalibrationMatrix = stereoCalibrationMatrix
+    self.ImuToCameraFramePose = ImuToCameraFramePose
 
   def ekfInertialPredict(self, v, w, tau, priorMean, priorCovariance, motionModelNoiseCovariance):
     twist = createTwistMatrix(v, w)
@@ -299,3 +424,48 @@ class ExtentedKalmanFilterInertial:
     sigma = (scipy.linalg.expm(-tau * adjoint) @ priorCovariance @ scipy.linalg.expm(-tau * adjoint).transpose()) + tau * motionModelNoiseCovariance
     return mu, sigma
 
+  def ekfLandmarkUpdate(self, ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior, priorMeans, priorCovariance, observationModelNoise, landmarkCoords, newObservations):
+    landmarkObservedInNewObservations = featuresValid(newObservations)
+    if (np.count_nonzero(featuresValid(newObservations) == True) == 0):
+      return priorMeans, priorCovariance
+    numOfLandmarks_t = int(newObservations.shape[0] / 4)
+    newObservationsMasked = newObservations.reshape(numOfLandmarks_t, 4)
+    newObservationsMasked = newObservationsMasked[landmarkObservedInNewObservations, :]
+    newObservationsMasked = newObservationsMasked.reshape(-1,1)
+    numOfLandmarks_t = int(newObservationsMasked.shape[0] / 4)
+
+    H = observationModelJacobianRespectToPose(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, landmarkCoords, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
+    
+    observationModelCovariance = observationModelNoise * np.eye(4 * numOfLandmarks_t)
+    K = ImuToWorldPoseCovariancePrior @ H.transpose() @ np.linalg.pinv(H @ ImuToWorldPoseCovariancePrior @ H.transpose() + observationModelCovariance)
+    
+    observationModelPrediction = observationModel(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, landmarkCoords, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
+    mu = ImuToWorldPoseMeanPrior @ scipy.linalg.expm(hatmapR6(K @ (newObservationsMasked - observationModelPrediction)))
+    sigma = (np.eye(sigma.shape[0]) - K @ H) @ ImuToWorldPoseCovariancePrior
+    return mu, sigma
+  
+  # def ekfPredict(self, v, w, tau, priorMean, priorCovariance, motionModelNoiseCovariance):
+  #   twist = createTwistMatrix(v, w)
+  #   adjoint = createAdjointTwist(v, w)
+  #   mu = priorMean @ scipy.linalg.expm(tau * twist)
+  #   sigma = (scipy.linalg.expm(-tau * adjoint) @ priorCovariance @ scipy.linalg.expm(-tau * adjoint).transpose()) + tau * motionModelNoiseCovariance
+  #   return mu, sigma
+
+  # def ekfUpdate(self, ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior, observationModelNoise, landmarkCoords, newObservations):
+  #   landmarkObservedInNewObservations = featuresValidator(newObservations)
+  #   if (np.count_nonzero(landmarkObservedInNewObservations == True) == 0):
+  #     # if there are no new landmarks, then imu update does not have any innovation
+  #     return ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior
+  #   numOfLandmarks_t = int(newObservations.shape[0] / 4)
+  #   newObservationsMasked = newObservations.reshape(numOfLandmarks_t, 4)
+  #   newObservationsMasked = newObservationsMasked[landmarkObservedInNewObservations, :]
+  #   newObservationsMasked = newObservationsMasked.reshape(-1,1)
+  #   numOfLandmarks_t = int(newObservationsMasked.shape[0] / 4)
+  #   H = observationModelJacobianRespectToPose(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, self.stereoCalibrationMatrix, landmarkCoords, landmarkObservedInNewObservations)
+  #   observationModelCovariance = observationModelNoise * np.eye(4 * numOfLandmarks_t)
+  #   K = ImuToWorldPoseCovariancePrior @ H.transpose() @ np.linalg.pinv(H @ ImuToWorldPoseCovariancePrior @ H.transpose() + observationModelCovariance)
+  #   observationModelPrediction = observationModel(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, landmarkCoords, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
+  #   mu = ImuToWorldPoseMeanPrior @ scipy.linalg.expm(hatmapR6(K @ (newObservationsMasked - observationModelPrediction)))
+  #   sigma = K @ H
+  #   sigma = (np.eye(sigma.shape[0]) - sigma) @ ImuToWorldPoseCovariancePrior
+  #   return mu, sigma
