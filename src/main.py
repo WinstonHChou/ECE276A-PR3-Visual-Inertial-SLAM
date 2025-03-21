@@ -34,7 +34,7 @@ if __name__ == '__main__':
   for i in tqdm(range(len(tau))):
     
     # EKF Prediction
-    poses[i+1,:,:], poseCovariance = ekf.ekfPredict(v_t[i,:], w_t[i,:], tau[i], poses[i,:,:], poseCovariance, motionModelCovariance)
+    poses[i+1,:,:], poseCovariance = ekf.ekfInertialPredict(v_t[i,:], w_t[i,:], tau[i], poses[i,:,:], poseCovariance, motionModelCovariance)
 
   fig, ax = visualize_trajectory_2d(poses, path_name="EKF Predicted", show_ori = True)
   plt.show()

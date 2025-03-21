@@ -292,7 +292,7 @@ class ExtentedKalmanFilterInertial:
     self.initialPose = initialPose
     self.stereoCalibrationMatrix = stereoCalibrationMatrix
 
-  def ekfPredict(self, v, w, tau, priorMean, priorCovariance, motionModelNoiseCovariance):
+  def ekfInertialPredict(self, v, w, tau, priorMean, priorCovariance, motionModelNoiseCovariance):
     twist = createTwistMatrix(v, w)
     adjoint = createAdjointTwist(v, w)
     mu = priorMean @ scipy.linalg.expm(tau * twist)
