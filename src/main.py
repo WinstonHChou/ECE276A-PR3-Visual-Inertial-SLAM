@@ -12,8 +12,8 @@ if __name__ == '__main__':
   baseline = np.linalg.norm(transformFromRtoLCamera[:3,3])
   M_stereo = createStereoCalibrationMatrix(K_l, K_r, baseline)
 
-  numOfFeaturesToKeep = 800 # USER INPUT
-  featuresDownSampled = features[:,0:-1:numOfFeaturesToKeep,:]
+  downSampleInterval = 8 # USER INPUT
+  featuresDownSampled = features[:,0:-1:downSampleInterval,:]
   numOfLandmarks = int(featuresDownSampled.shape[1]) # Number of Landmarks: M
 
   tau = np.diff(timestamps)
