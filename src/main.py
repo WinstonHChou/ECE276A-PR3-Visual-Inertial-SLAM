@@ -25,7 +25,7 @@ if __name__ == '__main__':
 
   landmarksCovariance = 0.01 * np.eye(3*numOfLandmarks) # USER INPUT
 
-  # (a) IMU Localization via EKF Prediction
+  # %% (a) IMU Localization via EKF Prediction
   ekf = ExtentedKalmanFilterInertial(M_stereo, initialPose=intialPoseMean)
   
   poses = np.zeros((len(normalizedStamps), 4, 4))
@@ -39,9 +39,9 @@ if __name__ == '__main__':
   fig, ax = visualize_trajectory_2d(poses, path_name="EKF Predicted", show_ori = True)
   plt.show()
 
-  # (b) Landmark Mapping via EKF Update
+  # %% (b) Landmark Mapping via EKF Update
 
-  # (c) Visual-Inertial SLAM
+  # %% (c) Visual-Inertial SLAM
 
   # You may use the function below to visualize the robot pose over time
   # visualize_trajectory_2d(world_T_imu, show_ori = True)
