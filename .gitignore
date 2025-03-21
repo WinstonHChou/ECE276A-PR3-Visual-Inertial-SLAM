@@ -170,6 +170,12 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+## MSVC Artifacts
+.vscode/
+.vs/
+.devcontainer/
+
 # Project 3
-**/trainset/**
-**/testset/**
+**/dataset00/**
+**/dataset01/**
+**/dataset03/**
