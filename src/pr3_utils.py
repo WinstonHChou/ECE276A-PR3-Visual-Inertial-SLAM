@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from transforms3d.euler import mat2euler, euler2mat
 import scipy
+from tqdm import tqdm
 
 def load_data(file_name: str):
     '''
@@ -222,6 +223,40 @@ def pose2adpose(T):
   calT[...,3:,3:] = T[...,:3,:3]
   return calT
 
+def hatmap(x): #function to compute hat map from R3 vector to skew-symmetrix matrix in so(3)
+  x1 = x[0]
+  x2 = x[1]
+  x3 = x[2]
+  return np.array([[0,-x3,x2],[x3,0,-x1],[-x2,x1,0]])
+
+def hatmapR6(q):
+  v = q[:3][:]
+  w = q[3:][:]
+  return createTwistMatrix(v.flatten(),w.flatten())
+
+def createTwistMatrix(v,w):
+  twist = np.eye(4)
+  wHat = hatmap(w)
+  twist[:3,:3] = wHat
+  twist[:3,3] = v
+  twist[3,3] = 0
+  return twist
+
+def createAdjointTwist(v,w):
+  adjoint = np.zeros((6,6))
+  wHat = hatmap(w)
+  vHat = hatmap(v)
+  adjoint[:3,:3] = wHat
+  adjoint[3:,3:] = wHat
+  adjoint[:3,3:] = vHat
+  return adjoint
+  
+def createPose(R, p):
+  p = np.atleast_2d(p).transpose()
+  result = np.hstack((R, p))
+  result = np.vstack((result, np.array([0,0,0,1])))
+  return result
+
 def createStereoCalibrationMatrix(K_left, K_right, b):
   fsu_l, fsv_l, cu_l, cv_l = K_left[0,0], K_left[1,1], K_left[0,2], K_left[1,2]
   fsu_r, fsv_r, cu_r, cv_r = K_right[0,0], K_right[1,1], K_right[0,2], K_right[1,2]
@@ -247,3 +282,16 @@ def getCameraFramePointFromPixelPair(feature, R, p_in, K): #feature is 4 x 1, R,
   m = ((a.transpose() @ a) / (a.transpose() @ b)) * z1
 
   return m
+
+class ExtentedKalmanFilterInertial:
+  def __init__(self, stereoCalibrationMatrix, initialPose = np.eye(4)):
+    self.initialPose = initialPose
+    self.stereoCalibrationMatrix = stereoCalibrationMatrix
+
+  def ekfPredict(self, v, w, tau, priorMean, priorCovariance, motionModelNoiseCovariance):
+    twist = createTwistMatrix(v, w)
+    adjoint = createAdjointTwist(v, w)
+    mu = priorMean @ scipy.linalg.expm(tau * twist)
+    sigma = (scipy.linalg.expm(-tau * adjoint) @ priorCovariance @ scipy.linalg.expm(-tau * adjoint).transpose()) + tau * motionModelNoiseCovariance
+    return mu, sigma
+

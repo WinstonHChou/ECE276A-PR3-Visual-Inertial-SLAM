@@ -5,36 +5,39 @@ from pr3_utils import *
 if __name__ == '__main__':
 
   # Load the measurements
-  filename = "../data/dataset00/dataset00.npy"
+  dataset = 0
+  filename = f"../data/dataset0{dataset}/dataset0{dataset}.npy"
   v_t,w_t,timestamps,features,K_l,K_r,extL_T_imu,extR_T_imu = load_data(filename)
   transformFromRtoLCamera = inversePose(extL_T_imu) @ extR_T_imu
   baseline = np.linalg.norm(transformFromRtoLCamera[:3,3])
   M_stereo = createStereoCalibrationMatrix(K_l, K_r, baseline)
 
+  numOfFeaturesToKeep = 800 # USER INPUT
+  featuresDownSampled = features[:,0:-1:numOfFeaturesToKeep,:]
+  numOfLandmarks = int(featuresDownSampled.shape[1]) # Number of Landmarks: M
+
+  tau = np.diff(timestamps)
+  normalizedStamps = np.cumsum(np.concatenate(([0], tau)))   # normalized timestamp
+  intialPoseMean = np.eye(4)
+  intialPoseCovariance = 0.1 * np.eye(6) # USER INPUT
+  motionModelNoise = float(0.0) # USER INPUT
+  motionModelCovariance = motionModelNoise * np.eye(6)
+
+  landmarksCovariance = 0.01 * np.eye(3*numOfLandmarks) # USER INPUT
+
   # (a) IMU Localization via EKF Prediction
-  # ekf = ExtentedKalmanFilterInertial(initialPose=np.eye(4))
-  # tau = np.diff(timestamps)
-  # normalizedStamps = np.cumsum(np.concatenate(([0], tau)))   # normalized timestamp
-  # poses = np.zeros((len(normalizedStamps), 3))
-  # prevPose = initialPose
-  # for i in len(tau):
-  #   omega_t = self.omega[i-1]
-
-  #   twist = jnp.zeros((4, 4))
-  #   twist[0, 1] = -omega_t
-  #   twist[1, 0] = omega_t
-  #   twist[0, 3] = v_t
-
-  #   T = T_prev @ scipy.linalg.expm(twist * dt)
-
-  #   R = T[:3, :3]
-  #   _, _, yaw = mat2euler(R, axes='sxyz')
-
-  #   pose[0] = T[0, 3]             # x
-  #   pose[1] = T[1, 3]             # y
-  #   pose[2] = angle_modulus(yaw)  # theta
+  ekf = ExtentedKalmanFilterInertial(M_stereo, initialPose=intialPoseMean)
+  
+  poses = np.zeros((len(normalizedStamps), 4, 4))
+  poses[0,:,:] = intialPoseMean
+  poseCovariance = intialPoseCovariance
+  for i in tqdm(range(len(tau))):
     
-  #   T_prev = T
+    # EKF Prediction
+    poses[i+1,:,:], poseCovariance = ekf.ekfPredict(v_t[i,:], w_t[i,:], tau[i], poses[i,:,:], poseCovariance, motionModelCovariance)
+
+  fig, ax = visualize_trajectory_2d(poses, path_name="EKF Predicted", show_ori = True)
+  plt.show()
 
   # (b) Landmark Mapping via EKF Update
 
@@ -42,5 +45,6 @@ if __name__ == '__main__':
 
   # You may use the function below to visualize the robot pose over time
   # visualize_trajectory_2d(world_T_imu, show_ori = True)
+  # plt.show()
 
 
