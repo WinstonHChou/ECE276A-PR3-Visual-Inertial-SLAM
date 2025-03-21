@@ -8,8 +8,8 @@ if __name__ == '__main__':
   filename = "../data/dataset00/dataset00.npy"
   v_t,w_t,timestamps,features,K_l,K_r,extL_T_imu,extR_T_imu = load_data(filename)
   transformFromRtoLCamera = inversePose(extL_T_imu) @ extR_T_imu
-  print(f"{extL_T_imu}\n{extR_T_imu}")
-  print(f"transform:\n{transformFromRtoLCamera}")
+  baseline = np.linalg.norm(transformFromRtoLCamera[:3,3])
+  M_stereo = createStereoCalibrationMatrix(K_l, K_r, baseline)
 
   # (a) IMU Localization via EKF Prediction
   # ekf = ExtentedKalmanFilterInertial(initialPose=np.eye(4))

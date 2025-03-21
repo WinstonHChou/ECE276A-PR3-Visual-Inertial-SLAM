@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from transforms3d.euler import mat2euler
+from transforms3d.euler import mat2euler, euler2mat
+import scipy
 
 def load_data(file_name: str):
     '''
@@ -221,3 +222,28 @@ def pose2adpose(T):
   calT[...,3:,3:] = T[...,:3,:3]
   return calT
 
+def createStereoCalibrationMatrix(K_left, K_right, b):
+  fsu_l, fsv_l, cu_l, cv_l = K_left[0,0], K_left[1,1], K_left[0,2], K_left[1,2]
+  fsu_r, fsv_r, cu_r, cv_r = K_right[0,0], K_right[1,1], K_right[0,2], K_right[1,2]
+  M_stereo = np.array([[fsu_l,     0, cu_l,        0],
+                       [    0, fsv_l, cv_l,        0],
+                       [fsu_r,     0, cu_r, -fsu_r*b],
+                       [    0, fsv_r, cv_r,        0]])
+  return M_stereo
+
+def getCameraFramePointFromPixelPair(feature, R, p_in, K): #feature is 4 x 1, R,p is from right camera to left camera
+  
+  K_inv = np.linalg.pinv(K)
+
+  e3 = np.array([[0,0,1]]).transpose()
+  z1 = np.atleast_2d(np.hstack((feature[:2],1))).transpose()
+  z2 = np.atleast_2d(np.hstack((feature[2:],1))).transpose()
+
+  z1 = K_inv @ z1
+  z2 = K_inv @ z2
+  p = np.atleast_2d(p_in).transpose()
+  a = (R.transpose() @ p) - (e3.transpose() @ R.transpose() @ p) * z2
+  b = (R.transpose() @ z1) - (e3.transpose() @ R.transpose() @ z1) * z2
+  m = ((a.transpose() @ a) / (a.transpose() @ b)) * z1
+
+  return m
