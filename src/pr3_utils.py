@@ -223,7 +223,11 @@ def pose2adpose(T):
   calT[...,3:,3:] = T[...,:3,:3]
   return calT
 
-def hatmap(x): #function to compute hat map from R3 vector to skew-symmetrix matrix in so(3)
+def hatmap(x):
+  """
+  compute hat map
+  hatmap(x): R3 -> so(3)
+  """
   x1 = x[0]
   x2 = x[1]
   x3 = x[2]
