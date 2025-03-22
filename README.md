@@ -71,7 +71,7 @@ python3 src/main.py dataset=0
 
 ## Features
 - Datasets are labelled 0-2
-- Generates **Visual-Inertial SLAM Trajectory**
+- Generates **IMU Based Landmark Mapping** and **Visual-Inertial SLAM Trajectory**
 
 ## Output Graphs
 
