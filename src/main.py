@@ -5,7 +5,7 @@ from pr3_utils import *
 if __name__ == '__main__':
 
   # Load the measurements
-  dataset = 1
+  dataset = 0
   filename = f"../data/dataset0{dataset}/dataset0{dataset}.npy"
   v_t,w_t,timestamps,features,K_l,K_r,extL_T_imu,extR_T_imu = load_data(filename)
   K_l_inv = np.linalg.pinv(K_l)
@@ -18,13 +18,12 @@ if __name__ == '__main__':
   featuresDownSampled = features[:,0:-1:downSampleInterval,:]
   numOfLandmarks = int(featuresDownSampled.shape[1]) # Number of Landmarks: M
   seenTracker = np.zeros(numOfLandmarks, dtype=bool)
-  print(features.shape[0])
 
   tau = np.diff(timestamps)
   normalizedStamps = np.cumsum(np.concatenate(([0], tau)))   # normalized timestamp
   intialPoseMean = np.eye(4)
   intialPoseCovariance = 0.1 * np.eye(6) # USER INPUT
-  motionModelNoise = float(0.1) # USER INPUT
+  motionModelNoise = float(0.01) # USER INPUT
   motionModelCovariance = motionModelNoise * np.eye(6)
 
   landmarksMean = np.zeros((3*numOfLandmarks,1))
@@ -44,6 +43,8 @@ if __name__ == '__main__':
     inertialPoses[i+1,:,:], poseCovariance = ekf.ekfInertialPredict(v_t[i,:], w_t[i,:], tau[i], inertialPoses[i,:,:], poseCovariance, motionModelCovariance)
 
   fig, ax = visualize_trajectory_2d(inertialPoses, path_name="EKF Predicted", show_ori = False)
+  ax.set_xlim(min(inertialPoses[:,0,3]) - 10, max(inertialPoses[:,0,3]) + 10)
+  ax.set_ylim(min(inertialPoses[:,1,3]) - 10, max(inertialPoses[:,1,3]) + 10)
   # plt.show()
 
   # %% (b) Landmark Mapping via EKF Update
@@ -57,8 +58,9 @@ if __name__ == '__main__':
     # Initialize Landmarks if observed for the first time
     for ii in range(newObservationsToInitializeMeans.shape[0]):
       cameraFramePoint = getCameraFramePointFromPixelObservation(newObservationsToInitializeMeans[ii], K_l, K_r, transformFromRtoLCamera)
-      worldFramePoint = inertialPoses[i,:,:] @ inversePose(extL_T_imu) @ cameraFramePoint
-      worldFrameNewObservations.append(worldFramePoint[:3])
+      if cameraFramePoint is not None:
+        worldFramePoint = inertialPoses[i,:,:] @ inversePose(extL_T_imu) @ cameraFramePoint
+        worldFrameNewObservations.append(worldFramePoint[:3])
 
     newMeansIndexTracker = 0
 

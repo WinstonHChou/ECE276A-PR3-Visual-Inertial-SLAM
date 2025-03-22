@@ -293,7 +293,10 @@ def getCameraFramePointFromPixelObservation(feature, K_l, K_r, transformFromRtoL
   z_l = feature[:2]
   z_r = feature[2:]
   normalizedDisparity = (z_l[0] - cu_l)/fsu_l - (z_r[0] - cu_r)/fsu_r
-  m_z = normalizedDisparity / b
+  if abs(normalizedDisparity) < 5E-3:
+    return None
+
+  m_z = b / normalizedDisparity
   m_x = (z_l[0] - cu_l)/fsu_l * m_z
   m_y = (z_l[1] - cv_l)/fsv_l * m_z
 
