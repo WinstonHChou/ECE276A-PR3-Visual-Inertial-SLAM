@@ -40,7 +40,7 @@ if __name__ == '__main__':
   for i in tqdm(range(len(tau))):
     
     # EKF Prediction
-    inertialPoses[i+1,:,:], poseCovariance = ekf.ekfInertialPredict(v_t[i,:], w_t[i,:], tau[i], inertialPoses[i,:,:], poseCovariance, motionModelCovariance)
+    inertialPoses[i+1,:,:], poseCovariance, _ = ekf.ekfInertialPredict(v_t[i,:], w_t[i,:], tau[i], inertialPoses[i,:,:], poseCovariance, motionModelCovariance)
 
   fig, ax = visualize_trajectory_2d(inertialPoses, path_name="EKF Predicted", show_ori = False)
   ax.set_xlim(min(inertialPoses[:,0,3]) - 10, max(inertialPoses[:,0,3]) + 10)
@@ -87,8 +87,61 @@ if __name__ == '__main__':
 
   # %% (c) Visual-Inertial SLAM
 
+  ekfSLAM = ExtentedKalmanFilterInertial(M_stereo, inversePose(extL_T_imu), initialPose=intialPoseMean)
+
+  slamPoses = np.zeros((len(normalizedStamps), 4, 4))
+  slamPoses[0,:,:] = intialPoseMean
+  slamLandmarksMeanPrior = np.zeros((3*numOfLandmarks,1))
+  slamLandmarksMean = np.zeros((3*numOfLandmarks,1))
+
+  allCovariance = np.eye(numOfLandmarks*3 + 6)
+  slamLandmarksCovariance = landmarksCovariancePriorNoise * np.eye(3*numOfLandmarks)
+  allCovariance[:numOfLandmarks*3, :numOfLandmarks*3] = slamLandmarksCovariance
+  allCovariance[numOfLandmarks*3:, numOfLandmarks*3:] = intialPoseCovariance
+  for i in tqdm(range(len(tau))):
+    
+    # EKF Prediction
+    allCovariance, slamLandmarksMean, slamPoses[i+1,:,:] = ekfSLAM.ekfPredict(v_t[i,:], w_t[i,:], tau[i], slamPoses[i,:,:], allCovariance, slamLandmarksMean, motionModelCovariance)
+
+    # Intialize Observation
+    newObservations = featuresDownSampled[:,:,i].transpose().flatten()
+    newObservationsBool = featuresValid(newObservations)
+    observationsForFirstTime = firstTimeObserved(seenTracker, newObservationsBool)
+    newObservationsToInitializeMeans = newObservations.reshape(numOfLandmarks, 4)[observationsForFirstTime,:]
+    worldFrameNewObservations = []
+
+    # Initialize Landmarks if observed for the first time
+    for ii in range(newObservationsToInitializeMeans.shape[0]):
+      cameraFramePoint = getCameraFramePointFromPixelObservation(newObservationsToInitializeMeans[ii], K_l, K_r, transformFromRtoLCamera)
+      if cameraFramePoint is not None:
+        worldFramePoint = slamPoses[i,:,:] @ inversePose(extL_T_imu) @ cameraFramePoint
+        worldFrameNewObservations.append(worldFramePoint[:3])
+
+    newMeansIndexTracker = 0
+
+    for ii in range(numOfLandmarks):
+      if observationsForFirstTime[ii]:
+        # Check bounds before accessing the list
+        if newMeansIndexTracker < len(worldFrameNewObservations):
+          slamLandmarksMeanPrior[ii*3:ii*3+3,:] = worldFrameNewObservations[newMeansIndexTracker] # just save for plotting
+          slamLandmarksMean[ii*3:ii*3+3,:] = worldFrameNewObservations[newMeansIndexTracker]
+          slamLandmarksCovariance[ii,ii] = landmarksCovariancePriorNoise
+          newMeansIndexTracker += 1
+
+    seenTracker = seenTracker | observationsForFirstTime
+
+    # EKF Update for Landmark Only
+    allCovariance, slamLandmarksMean, slamPoses[i+1,:,:] = ekfSLAM.ekfUpdate(slamLandmarksMean, slamPoses[i+1,:,:], allCovariance, observationModelNoise, newObservations)
+
   # You may use the function below to visualize the robot pose over time
-  # visualize_trajectory_2d(world_T_imu, show_ori = True)
-  # plt.show()
+  fig, ax = visualize_trajectory_2d(slamPoses, path_name="EKF SLAM", show_ori = True)
+  ax.set_xlim(min(slamPoses[:,0,3]) - 10, max(slamPoses[:,0,3]) + 10)
+  ax.set_ylim(min(slamPoses[:,1,3]) - 10, max(slamPoses[:,1,3]) + 10)
+
+  slamLandmarksPriorReshaped = slamLandmarksMeanPrior.reshape(int(slamLandmarksMeanPrior.shape[0] / 3), 3)
+  slamLandmarksReshaped = slamLandmarksMean.reshape(int(slamLandmarksMean.shape[0] / 3), 3)
+  ax.scatter(slamLandmarksPriorReshaped[:,0],slamLandmarksPriorReshaped[:,1],color='blue',s=0.4)
+  ax.scatter(slamLandmarksReshaped[:,0],slamLandmarksReshaped[:,1],color='lime',s=0.4)
+  plt.show()
 
 
