@@ -1,12 +1,32 @@
 import numpy as np
 from pr3_utils import *
+import sys
+
+def parse_args(argv):
+    parsed_args = {}
+    for arg in argv:
+        if '=' in arg:
+            key, value = arg.split('=', 1)
+            if key == 'dataset':
+                parsed_args['dataset'] = int(value)
+    
+    # Set default values if not provided
+    parsed_args.setdefault('dataset', None)
+    
+    return parsed_args
 
 
 if __name__ == '__main__':
 
   # Load the measurements
-  dataset = 0
-  filename = f"../data/dataset0{dataset}/dataset0{dataset}.npy"
+  args = parse_args(sys.argv)
+
+  try:
+      dataset = int(args['dataset'])
+  except:
+      raise ValueError('Please select a dataset to process. Use: "dataset=<1-2>"')
+
+  filename = f"data/dataset0{dataset}/dataset0{dataset}.npy"
   v_t,w_t,timestamps,features,K_l,K_r,extL_T_imu,extR_T_imu = load_data(filename)
   K_l_inv = np.linalg.pinv(K_l)
   K_r_inv = np.linalg.pinv(K_r)
@@ -14,7 +34,7 @@ if __name__ == '__main__':
   baseline = np.linalg.norm(transformFromRtoLCamera[:3,3])
   M_stereo = createStereoCalibrationMatrix(K_l, K_r, baseline)
 
-  downSampleInterval = 8 # USER INPUT
+  downSampleInterval = 15                                                       # USER INPUT
   featuresDownSampled = features[:,0:-1:downSampleInterval,:]
   numOfLandmarks = int(featuresDownSampled.shape[1]) # Number of Landmarks: M
   seenTracker = np.zeros(numOfLandmarks, dtype=bool)
@@ -22,14 +42,14 @@ if __name__ == '__main__':
   tau = np.diff(timestamps)
   normalizedStamps = np.cumsum(np.concatenate(([0], tau)))   # normalized timestamp
   intialPoseMean = np.eye(4)
-  intialPoseCovariance = 0.1 * np.eye(6) # USER INPUT
-  motionModelNoise = float(0.01) # USER INPUT
+  intialPoseCovariance = 0.001 * np.eye(6)                                        # USER INPUT
+  motionModelNoise = float(0.01)                                                  # USER INPUT
   motionModelCovariance = motionModelNoise * np.eye(6)
 
   landmarksMean = np.zeros((3*numOfLandmarks,1))
-  landmarksCovariancePriorNoise = float(0.1) # USER INPUT
+  landmarksCovariancePriorNoise = float(0.005)                                     # USER INPUT
   landmarksCovariance = landmarksCovariancePriorNoise * np.eye(3*numOfLandmarks)
-  observationModelNoise = float(0.1) # USER INPUT
+  observationModelNoise = float(0.001)                                            # USER INPUT
 
   # %% (a) IMU Localization via EKF Prediction
   ekf = ExtentedKalmanFilterInertial(M_stereo, inversePose(extL_T_imu), initialPose=intialPoseMean)
@@ -81,8 +101,8 @@ if __name__ == '__main__':
 
   landmarksPriorReshaped = landmarksMeanPrior.reshape(int(landmarksMeanPrior.shape[0] / 3), 3)
   landmarksReshaped = landmarksMean.reshape(int(landmarksMean.shape[0] / 3), 3)
-  ax.scatter(landmarksPriorReshaped[:,0],landmarksPriorReshaped[:,1],color='blue',s=0.4)
-  ax.scatter(landmarksReshaped[:,0],landmarksReshaped[:,1],color='lime',s=0.4)
+  ax.scatter(landmarksPriorReshaped[:,0],landmarksPriorReshaped[:,1],color='blue',s=4)
+  ax.scatter(landmarksReshaped[:,0],landmarksReshaped[:,1],color='lime',s=4)
   # plt.show()
 
   # %% (c) Visual-Inertial SLAM
@@ -140,8 +160,8 @@ if __name__ == '__main__':
 
   slamLandmarksPriorReshaped = slamLandmarksMeanPrior.reshape(int(slamLandmarksMeanPrior.shape[0] / 3), 3)
   slamLandmarksReshaped = slamLandmarksMean.reshape(int(slamLandmarksMean.shape[0] / 3), 3)
-  ax.scatter(slamLandmarksPriorReshaped[:,0],slamLandmarksPriorReshaped[:,1],color='blue',s=0.4)
-  ax.scatter(slamLandmarksReshaped[:,0],slamLandmarksReshaped[:,1],color='lime',s=0.4)
+  ax.scatter(slamLandmarksPriorReshaped[:,0],slamLandmarksPriorReshaped[:,1],color='blue',s=4)
+  ax.scatter(slamLandmarksReshaped[:,0],slamLandmarksReshaped[:,1],color='lime',s=4)
   plt.show()
 
 
