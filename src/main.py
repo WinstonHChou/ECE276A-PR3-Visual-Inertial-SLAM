@@ -5,9 +5,11 @@ from pr3_utils import *
 if __name__ == '__main__':
 
   # Load the measurements
-  dataset = 0
+  dataset = 1
   filename = f"../data/dataset0{dataset}/dataset0{dataset}.npy"
   v_t,w_t,timestamps,features,K_l,K_r,extL_T_imu,extR_T_imu = load_data(filename)
+  K_l_inv = np.linalg.pinv(K_l)
+  K_r_inv = np.linalg.pinv(K_r)
   transformFromRtoLCamera = extL_T_imu @ inversePose(extR_T_imu)
   baseline = np.linalg.norm(transformFromRtoLCamera[:3,3])
   M_stereo = createStereoCalibrationMatrix(K_l, K_r, baseline)
@@ -33,16 +35,16 @@ if __name__ == '__main__':
   # %% (a) IMU Localization via EKF Prediction
   ekf = ExtentedKalmanFilterInertial(M_stereo, inversePose(extL_T_imu), initialPose=intialPoseMean)
   
-  poses = np.zeros((len(normalizedStamps), 4, 4))
-  poses[0,:,:] = intialPoseMean
+  inertialPoses = np.zeros((len(normalizedStamps), 4, 4))
+  inertialPoses[0,:,:] = intialPoseMean
   poseCovariance = intialPoseCovariance
   for i in tqdm(range(len(tau))):
     
     # EKF Prediction
-    poses[i+1,:,:], poseCovariance = ekf.ekfInertialPredict(v_t[i,:], w_t[i,:], tau[i], poses[i,:,:], poseCovariance, motionModelCovariance)
+    inertialPoses[i+1,:,:], poseCovariance = ekf.ekfInertialPredict(v_t[i,:], w_t[i,:], tau[i], inertialPoses[i,:,:], poseCovariance, motionModelCovariance)
 
-  fig, ax = visualize_trajectory_2d(poses, path_name="EKF Predicted", show_ori = True)
-  plt.show()
+  fig, ax = visualize_trajectory_2d(inertialPoses, path_name="EKF Predicted", show_ori = False)
+  # plt.show()
 
   # %% (b) Landmark Mapping via EKF Update
   for i in tqdm(range(len(tau))):
@@ -53,26 +55,29 @@ if __name__ == '__main__':
     worldFrameNewObservations = []
 
     # Initialize Landmarks if observed for the first time
-    for i in range(newObservationsToInitializeMeans.shape[0]):
-      cameraFramePoint = getCameraFramePointFromPixelObservation(newObservationsToInitializeMeans[i], M_stereo)
-      worldFramePoint = poses[i,:,:] @ inversePose(extL_T_imu) @ cameraFramePoint
+    for ii in range(newObservationsToInitializeMeans.shape[0]):
+      cameraFramePoint = getCameraFramePointFromPixelObservation(newObservationsToInitializeMeans[ii], K_l, K_r, transformFromRtoLCamera)
+      worldFramePoint = inertialPoses[i,:,:] @ inversePose(extL_T_imu) @ cameraFramePoint
       worldFrameNewObservations.append(worldFramePoint[:3])
 
     newMeansIndexTracker = 0
 
-    for i in range(numOfLandmarks):
-      if observationsForFirstTime[i]:
-        landmarksMean[i*3:i*3+3,:] = worldFrameNewObservations[newMeansIndexTracker]
-        landmarksCovariance[i,i] = landmarksCovariancePriorNoise
-        newMeansIndexTracker = newMeansIndexTracker + 1
+    for ii in range(numOfLandmarks):
+      if observationsForFirstTime[ii]:
+        # Check bounds before accessing the list
+        if newMeansIndexTracker < len(worldFrameNewObservations):
+          landmarksMean[ii*3:ii*3+3,:] = worldFrameNewObservations[newMeansIndexTracker]
+          landmarksCovariance[ii,ii] = landmarksCovariancePriorNoise
+          newMeansIndexTracker += 1
 
     seenTracker = seenTracker | observationsForFirstTime
 
     # EKF Update for Landmark Only
-    # landmarksMean, landmarksCovariance = ekf.ekfLandmarkUpdate(v_t[i,:], w_t[i,:], tau[i], landmarksMean, landmarksCovariance, observationModelNoise, , newObservations)
+    landmarksMean, landmarksCovariance = ekf.ekfLandmarkUpdate(inertialPoses[i,:,:], landmarksMean, landmarksCovariance, observationModelNoise, newObservations)
 
-  # fig, ax = visualize_trajectory_2d(poses, path_name="EKF Predicted", show_ori = True)
-  # plt.show()
+  landmarksReshaped = landmarksMean.reshape(int(landmarksMean.shape[0] / 3), 3)
+  ax.scatter(landmarksReshaped[:,0],landmarksReshaped[:,1],color='blue',s=0.4)
+  plt.show()
 
   # %% (c) Visual-Inertial SLAM
 

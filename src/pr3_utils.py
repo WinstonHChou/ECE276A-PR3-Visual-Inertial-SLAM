@@ -277,12 +277,28 @@ def createStereoCalibrationMatrix(K_left, K_right, b):
                        [    0, fsv_r, cv_r,        0]])
   return M_stereo
 
-def getCameraFramePointFromPixelObservation(feature, M_stereo):
-  M_stereo_inv = np.linalg.pinv(M_stereo)
-  z = np.atleast_2d(np.hstack(feature)).transpose()
-  z = M_stereo_inv @ z
-  disparity = 1 / z[3]
-  m_CameraFrame = inversePose(transformCameraToOptical) @ (z * disparity)
+def getCameraFramePointFromPixelObservation(feature, K_l, K_r, transformFromRtoLCamera):
+  fsu_l = K_l[0,0]
+  fsv_l = K_l[1,1]
+  fsu_r = K_r[0,0]
+  fsv_r = K_r[1,1]
+  cu_l = K_l[0, 2]
+  cv_l = K_l[1, 2]
+  cu_r = K_r[0, 2]
+  cv_r = K_r[1, 2]
+  R = transformFromRtoLCamera[:3,:3]
+  p = transformFromRtoLCamera[:3,3]
+  b = np.linalg.norm(p)
+
+  z_l = feature[:2]
+  z_r = feature[2:]
+  normalizedDisparity = (z_l[0] - cu_l)/fsu_l - (z_r[0] - cu_r)/fsu_r
+  m_z = normalizedDisparity / b
+  m_x = (z_l[0] - cu_l)/fsu_l * m_z
+  m_y = (z_l[1] - cv_l)/fsv_l * m_z
+
+  m = np.vstack((m_x, m_y, m_z, 1))
+  m_CameraFrame = inversePose(transformCameraToOptical) @ m
   return m_CameraFrame
 
 def firstTimeObserved(tracker, newObservationsBool):
@@ -378,7 +394,7 @@ def observationModelJacobianRespectToPose(ImuToWorldPoseMeanPrior, ImuToCameraFr
   for i in range(numOfLandmarks_t):
     if landmarkObservedInNewObservations[i]:
       landmarkCoord = landmarkCoords[3*i:3*i+3,:]
-      landmarkCoord = np.vstack((landmarkCoord,1))
+      # landmarkCoord = np.vstack((landmarkCoord,1))
       H_t1_i = -stereoCalibMatrix @ derivativeProjectionFunction(ImuToCameraFramePose @ inverseImuToWorldPoseMeanPrior @ landmarkCoord) @ ImuToCameraFramePose @ odotMap(inverseImuToWorldPoseMeanPrior @ landmarkCoord)
       H[4*HRowTracker:4*HRowTracker+4,:] = H_t1_i
       HRowTracker = HRowTracker + 1
@@ -399,7 +415,10 @@ def derivativeProjectionFunction(q):
   q2 = q[1][0]
   q3 = q[2][0]
   q4 = q[3][0]
-  result = (1 / q3) * np.array([[1,0,-q1/q3,0],[0,1,-q2/q3,0],[0,0,0,0],[0,0,-q4/q3,1]])
+  result = (1 / q3) * np.array([[1,0,-q1/q3,0],
+                                [0,1,-q2/q3,0],
+                                [0,0,0,0],
+                                [0,0,-q4/q3,1]])
   return result
 
 def stereoCameraJacobian(ImuToWorldPose, ImuToCameraFramePose, landmarkWorldCoord, stereoCalibMatrix):
@@ -424,25 +443,39 @@ class ExtentedKalmanFilterInertial:
     sigma = (scipy.linalg.expm(-tau * adjoint) @ priorCovariance @ scipy.linalg.expm(-tau * adjoint).transpose()) + tau * motionModelNoiseCovariance
     return mu, sigma
 
-  def ekfLandmarkUpdate(self, ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior, priorMeans, priorCovariance, observationModelNoise, landmarkCoords, newObservations):
-    landmarkObservedInNewObservations = featuresValid(newObservations)
+  def ekfLandmarkUpdate(self, ImuToWorldPose, priorMeans, priorCovariance, observationModelNoise, newObservations):
+    
     if (np.count_nonzero(featuresValid(newObservations) == True) == 0):
       return priorMeans, priorCovariance
+    landmarkObservedInNewObservations = featuresValid(newObservations)
+    landmarksObservedRange = np.argwhere(landmarkObservedInNewObservations == True)
+    firstLandmarkObservedIndex = int(landmarksObservedRange[0])
     numOfLandmarks_t = int(newObservations.shape[0] / 4)
     newObservationsMasked = newObservations.reshape(numOfLandmarks_t, 4)
     newObservationsMasked = newObservationsMasked[landmarkObservedInNewObservations, :]
     newObservationsMasked = newObservationsMasked.reshape(-1,1)
     numOfLandmarks_t = int(newObservationsMasked.shape[0] / 4)
 
-    H = observationModelJacobianRespectToPose(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, landmarkCoords, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
-    
+    # Define relevant data to update
+    relevantCovariance = priorCovariance[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3, firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3]
+
+    H = observationModelJacobianRespectToLandmarks(ImuToWorldPose, self.ImuToCameraFramePose, priorMeans, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
+    H = H[:,firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3]
     observationModelCovariance = observationModelNoise * np.eye(4 * numOfLandmarks_t)
-    K = ImuToWorldPoseCovariancePrior @ H.transpose() @ np.linalg.pinv(H @ ImuToWorldPoseCovariancePrior @ H.transpose() + observationModelCovariance)
     
-    observationModelPrediction = observationModel(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, landmarkCoords, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
-    mu = ImuToWorldPoseMeanPrior @ scipy.linalg.expm(hatmapR6(K @ (newObservationsMasked - observationModelPrediction)))
-    sigma = (np.eye(sigma.shape[0]) - K @ H) @ ImuToWorldPoseCovariancePrior
-    return mu, sigma
+    # The diagonals that correspond to the newly observed landmarks will change, everything else remains the same to speed up the process
+    observationModelCovariance = observationModelNoise * np.eye(4 * numOfLandmarks_t)
+    K =  relevantCovariance @ H.transpose() @ np.linalg.pinv(H @ relevantCovariance @ H.transpose() + observationModelCovariance)
+    mu = priorMeans[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3] + K @ (newObservationsMasked - observationModel(ImuToWorldPose, self.ImuToCameraFramePose, priorMeans, self.stereoCalibrationMatrix, landmarkObservedInNewObservations))
+    sigma = K @ H
+    sigma = (np.eye(sigma.shape[0]) - K @ H) @ relevantCovariance
+
+    full_mu = priorMeans.copy()
+    full_mu[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3] = mu
+    full_sigma = priorCovariance.copy()
+    full_sigma[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3, firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3] = sigma
+
+    return full_mu, full_sigma
   
   # def ekfPredict(self, v, w, tau, priorMean, priorCovariance, motionModelNoiseCovariance):
   #   twist = createTwistMatrix(v, w)
