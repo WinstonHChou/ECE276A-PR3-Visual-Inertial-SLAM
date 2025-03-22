@@ -397,7 +397,7 @@ def observationModelJacobianRespectToPose(ImuToWorldPoseMeanPrior, ImuToCameraFr
   for i in range(numOfLandmarks_t):
     if landmarkObservedInNewObservations[i]:
       landmarkCoord = landmarkCoords[3*i:3*i+3,:]
-      # landmarkCoord = np.vstack((landmarkCoord,1))
+      landmarkCoord = np.vstack((landmarkCoord,1))
       H_t1_i = -stereoCalibMatrix @ derivativeProjectionFunction(ImuToCameraFramePose @ inverseImuToWorldPoseMeanPrior @ landmarkCoord) @ ImuToCameraFramePose @ odotMap(inverseImuToWorldPoseMeanPrior @ landmarkCoord)
       H[4*HRowTracker:4*HRowTracker+4,:] = H_t1_i
       HRowTracker = HRowTracker + 1
@@ -443,8 +443,9 @@ class ExtentedKalmanFilterInertial:
     twist = createTwistMatrix(v, w)
     adjoint = createAdjointTwist(v, w)
     mu = priorMean @ scipy.linalg.expm(tau * twist)
-    sigma = (scipy.linalg.expm(-tau * adjoint) @ priorCovariance @ scipy.linalg.expm(-tau * adjoint).transpose()) + tau * motionModelNoiseCovariance
-    return mu, sigma
+    F = scipy.linalg.expm(-tau * adjoint)
+    sigma = (F @ priorCovariance @ F.transpose()) + tau * motionModelNoiseCovariance
+    return mu, sigma, F
 
   def ekfLandmarkUpdate(self, ImuToWorldPose, priorMeans, priorCovariance, observationModelNoise, newObservations):
     
@@ -480,28 +481,103 @@ class ExtentedKalmanFilterInertial:
 
     return full_mu, full_sigma
   
-  # def ekfPredict(self, v, w, tau, priorMean, priorCovariance, motionModelNoiseCovariance):
-  #   twist = createTwistMatrix(v, w)
-  #   adjoint = createAdjointTwist(v, w)
-  #   mu = priorMean @ scipy.linalg.expm(tau * twist)
-  #   sigma = (scipy.linalg.expm(-tau * adjoint) @ priorCovariance @ scipy.linalg.expm(-tau * adjoint).transpose()) + tau * motionModelNoiseCovariance
-  #   return mu, sigma
+  def ekfPredict(self, v, w, tau, priorPoseMean, priorCovariance, priorLandmarkMean, motionModelNoiseCovariance):
+    dimension = priorCovariance.shape[0]
+    landmarkCount = int((dimension - 6)/3)
+    poseCovariance = priorCovariance[landmarkCount * 3:, landmarkCount * 3:]
+    bottomLeftCovariance = priorCovariance[landmarkCount * 3:, :landmarkCount * 3]
+    topRightCovariance = priorCovariance[:landmarkCount * 3, landmarkCount * 3:]
+    poseMean, poseCovariance, F = self.ekfInertialPredict(v, w, tau, priorPoseMean, poseCovariance, motionModelNoiseCovariance)
 
-  # def ekfUpdate(self, ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior, observationModelNoise, landmarkCoords, newObservations):
-  #   landmarkObservedInNewObservations = featuresValidator(newObservations)
-  #   if (np.count_nonzero(landmarkObservedInNewObservations == True) == 0):
-  #     # if there are no new landmarks, then imu update does not have any innovation
-  #     return ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior
-  #   numOfLandmarks_t = int(newObservations.shape[0] / 4)
-  #   newObservationsMasked = newObservations.reshape(numOfLandmarks_t, 4)
-  #   newObservationsMasked = newObservationsMasked[landmarkObservedInNewObservations, :]
-  #   newObservationsMasked = newObservationsMasked.reshape(-1,1)
-  #   numOfLandmarks_t = int(newObservationsMasked.shape[0] / 4)
-  #   H = observationModelJacobianRespectToPose(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, self.stereoCalibrationMatrix, landmarkCoords, landmarkObservedInNewObservations)
-  #   observationModelCovariance = observationModelNoise * np.eye(4 * numOfLandmarks_t)
-  #   K = ImuToWorldPoseCovariancePrior @ H.transpose() @ np.linalg.pinv(H @ ImuToWorldPoseCovariancePrior @ H.transpose() + observationModelCovariance)
-  #   observationModelPrediction = observationModel(ImuToWorldPoseMeanPrior, self.ImuToCameraFramePose, landmarkCoords, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
-  #   mu = ImuToWorldPoseMeanPrior @ scipy.linalg.expm(hatmapR6(K @ (newObservationsMasked - observationModelPrediction)))
-  #   sigma = K @ H
-  #   sigma = (np.eye(sigma.shape[0]) - sigma) @ ImuToWorldPoseCovariancePrior
-  #   return mu, sigma
+    # Update all covaraince
+    priorCovariance[landmarkCount * 3:, landmarkCount * 3:] = poseCovariance
+    priorCovariance[landmarkCount * 3:, :landmarkCount * 3] = F @ bottomLeftCovariance
+    priorCovariance[:landmarkCount * 3, landmarkCount * 3:] = topRightCovariance @ F.transpose()
+    return priorCovariance, priorLandmarkMean, poseMean
+
+  
+  def ekfUpdate(self, landmarkMeanPrior, poseMeanPrior, totalCovariancePrior, observationModelNoise, newObservations):
+    dimension = totalCovariancePrior.shape[0]
+    landmarkCount = int((dimension - 6)/3)
+    landmarkCovariancePrior = totalCovariancePrior[:landmarkCount * 3, :landmarkCount * 3]
+    poseCovariancePrior = totalCovariancePrior[landmarkCount * 3:, landmarkCount * 3:]
+
+    landmarkObservedInNewObservations = featuresValid(newObservations)
+
+    # Compute Combined Jacobian
+    HRespectToLandmark = observationModelJacobianRespectToLandmarks(poseMeanPrior, self.ImuToCameraFramePose, landmarkMeanPrior, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
+    HRespectToPose = observationModelJacobianRespectToPose(poseMeanPrior, self.ImuToCameraFramePose, landmarkMeanPrior, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
+    HSLAM = np.hstack((HRespectToLandmark, HRespectToPose))
+
+    numberOfLandmarks = int(newObservations.shape[0] / 4)
+    newObservationsMasked = newObservations.reshape(numberOfLandmarks, 4)
+    newObservationsMasked = newObservationsMasked[landmarkObservedInNewObservations, :]
+    newObservationsMasked = newObservationsMasked.reshape(-1,1)
+    numberOfLandmarks = int(newObservationsMasked.shape[0] / 4)
+
+    if numberOfLandmarks == 0:
+      return totalCovariancePrior, landmarkMeanPrior, poseMeanPrior
+
+    observationModelCovariance = observationModelNoise * np.eye(4 * numberOfLandmarks)
+
+    # Compute the Combined Kalman Gain
+    KSLAM = totalCovariancePrior @ HSLAM.transpose() @ np.linalg.pinv(HSLAM @ totalCovariancePrior @ HSLAM.transpose() + observationModelCovariance)
+    KLandmark = KSLAM[:3 * landmarkCount, :]
+    KPose = KSLAM[3 * landmarkCount:, :]
+
+    observationModelPrediction = observationModel(poseMeanPrior, self.ImuToCameraFramePose, landmarkMeanPrior, self.stereoCalibrationMatrix, landmarkObservedInNewObservations)
+
+    poseMean, poseCovariance = self.ekfSLAMInertialUpdate(poseMeanPrior, poseCovariancePrior, newObservations, KPose, observationModelPrediction, HRespectToPose)
+
+    landmarkMean, landmarkCovariance = self.ekfSLAMLandmarkUpdate(landmarkMeanPrior, landmarkCovariancePrior, newObservations, KLandmark, observationModelPrediction, HRespectToLandmark)
+
+    totalCovariancePrior[:landmarkCount * 3, :landmarkCount * 3] = landmarkCovariance
+    totalCovariancePrior[landmarkCount * 3:, landmarkCount * 3:] = poseCovariance
+
+    return totalCovariancePrior, landmarkMean, poseMean
+  
+  def ekfSLAMInertialUpdate(self, ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior, newObservations, K, observationModelPrediction, H):
+    landmarkObservedInNewObservations = featuresValid(newObservations)
+
+    if (np.count_nonzero(landmarkObservedInNewObservations == True) == 0):
+      return ImuToWorldPoseMeanPrior, ImuToWorldPoseCovariancePrior
+    
+    numberOfLandmarks = int(newObservations.shape[0] / 4)
+    newObservationsMasked = newObservations.reshape(numberOfLandmarks, 4)
+    newObservationsMasked = newObservationsMasked[landmarkObservedInNewObservations, :]
+    newObservationsMasked = newObservationsMasked.reshape(-1,1)
+    numberOfLandmarks = int(newObservationsMasked.shape[0] / 4)
+
+    mu = ImuToWorldPoseMeanPrior @ scipy.linalg.expm(hatmapR6(K @ (newObservationsMasked - observationModelPrediction)))
+    sigma = K @ H
+    sigma = (np.eye(sigma.shape[0]) - sigma) @ ImuToWorldPoseCovariancePrior
+    return mu, sigma
+
+  def ekfSLAMLandmarkUpdate(self, priorMeans, priorCovariance, newObservations, KLandmark, observationModelPrediction, HRespectToLandmark):
+    
+    if (np.count_nonzero(featuresValid(newObservations) == True) == 0):
+      return priorMeans, priorCovariance
+    landmarkObservedInNewObservations = featuresValid(newObservations)
+    landmarksObservedRange = np.argwhere(landmarkObservedInNewObservations == True)
+    firstLandmarkObservedIndex = int(landmarksObservedRange[0])
+    numOfLandmarks_t = int(newObservations.shape[0] / 4)
+    newObservationsMasked = newObservations.reshape(numOfLandmarks_t, 4)
+    newObservationsMasked = newObservationsMasked[landmarkObservedInNewObservations, :]
+    newObservationsMasked = newObservationsMasked.reshape(-1,1)
+    numOfLandmarks_t = int(newObservationsMasked.shape[0] / 4)
+
+    # Extract Kalman Gain and Define relevant data to update
+    K = KLandmark[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3,:]
+    relevantCovariance = priorCovariance[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3, firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3]
+
+    H = HRespectToLandmark[:,firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3]
+    mu = priorMeans[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3] + K @ (newObservationsMasked - observationModelPrediction)
+    sigma = K @ H
+    sigma = (np.eye(sigma.shape[0]) - K @ H) @ relevantCovariance
+
+    full_mu = priorMeans.copy()
+    full_mu[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3] = mu
+    full_sigma = priorCovariance.copy()
+    full_sigma[firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3, firstLandmarkObservedIndex*3:(firstLandmarkObservedIndex + numOfLandmarks_t)*3] = sigma
+
+    return full_mu, full_sigma
