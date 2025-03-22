@@ -34,7 +34,7 @@ if __name__ == '__main__':
   baseline = np.linalg.norm(transformFromRtoLCamera[:3,3])
   M_stereo = createStereoCalibrationMatrix(K_l, K_r, baseline)
 
-  downSampleInterval = 15                                                       # USER INPUT
+  downSampleInterval = 25                                                       # USER INPUT
   featuresDownSampled = features[:,0:-1:downSampleInterval,:]
   numOfLandmarks = int(featuresDownSampled.shape[1]) # Number of Landmarks: M
   seenTracker = np.zeros(numOfLandmarks, dtype=bool)
