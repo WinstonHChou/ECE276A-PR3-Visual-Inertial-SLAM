@@ -48,6 +48,7 @@ if __name__ == '__main__':
   # plt.show()
 
   # %% (b) Landmark Mapping via EKF Update
+  landmarksMeanPrior = np.zeros((3*numOfLandmarks,1))
   for i in tqdm(range(len(tau))):
     newObservations = featuresDownSampled[:,:,i].transpose().flatten()
     newObservationsBool = featuresValid(newObservations)
@@ -68,6 +69,7 @@ if __name__ == '__main__':
       if observationsForFirstTime[ii]:
         # Check bounds before accessing the list
         if newMeansIndexTracker < len(worldFrameNewObservations):
+          landmarksMeanPrior[ii*3:ii*3+3,:] = worldFrameNewObservations[newMeansIndexTracker] # just save for plotting
           landmarksMean[ii*3:ii*3+3,:] = worldFrameNewObservations[newMeansIndexTracker]
           landmarksCovariance[ii,ii] = landmarksCovariancePriorNoise
           newMeansIndexTracker += 1
@@ -77,9 +79,11 @@ if __name__ == '__main__':
     # EKF Update for Landmark Only
     landmarksMean, landmarksCovariance = ekf.ekfLandmarkUpdate(inertialPoses[i,:,:], landmarksMean, landmarksCovariance, observationModelNoise, newObservations)
 
+  landmarksPriorReshaped = landmarksMeanPrior.reshape(int(landmarksMeanPrior.shape[0] / 3), 3)
   landmarksReshaped = landmarksMean.reshape(int(landmarksMean.shape[0] / 3), 3)
-  ax.scatter(landmarksReshaped[:,0],landmarksReshaped[:,1],color='blue',s=0.4)
-  plt.show()
+  ax.scatter(landmarksPriorReshaped[:,0],landmarksPriorReshaped[:,1],color='blue',s=0.4)
+  ax.scatter(landmarksReshaped[:,0],landmarksReshaped[:,1],color='lime',s=0.4)
+  # plt.show()
 
   # %% (c) Visual-Inertial SLAM
 

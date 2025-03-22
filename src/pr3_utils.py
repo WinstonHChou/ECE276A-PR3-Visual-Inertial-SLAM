@@ -49,7 +49,7 @@ def visualize_trajectory_2d(pose,path_name="Unknown",show_ori=False):
                 where N is the number of poses, and each
                 4*4 matrix is in SE(3)
     '''
-    fig,ax = plt.subplots(figsize=(5,5))
+    fig,ax = plt.subplots(figsize=(10, 8))
     n_pose = pose.shape[0]
     ax.plot(pose[:,0,3],pose[:,1,3],'r-',label=path_name)
     ax.scatter(pose[0,0,3],pose[0,1,3],marker='s',label="start")
