@@ -43,13 +43,13 @@ if __name__ == '__main__':
   normalizedStamps = np.cumsum(np.concatenate(([0], tau)))   # normalized timestamp
   intialPoseMean = np.eye(4)
   intialPoseCovariance = 0.001 * np.eye(6)                                        # USER INPUT
-  motionModelNoise = float(0.01)                                                  # USER INPUT
+  motionModelNoise = float(0.001)                                                  # USER INPUT
   motionModelCovariance = motionModelNoise * np.eye(6)
 
   landmarksMean = np.zeros((3*numOfLandmarks,1))
-  landmarksCovariancePriorNoise = float(0.005)                                     # USER INPUT
+  landmarksCovariancePriorNoise = float(0.01)                                     # USER INPUT
   landmarksCovariance = landmarksCovariancePriorNoise * np.eye(3*numOfLandmarks)
-  observationModelNoise = float(0.001)                                            # USER INPUT
+  observationModelNoise = float(0.05)                                            # USER INPUT
 
   # %% (a) IMU Localization via EKF Prediction
   ekf = ExtentedKalmanFilterInertial(M_stereo, inversePose(extL_T_imu), initialPose=intialPoseMean)
