@@ -24,7 +24,7 @@ if __name__ == '__main__':
   try:
       dataset = int(args['dataset'])
   except:
-      raise ValueError('Please select a dataset to process. Use: "dataset=<1-2>"')
+      raise ValueError('Please select a dataset to process. Use: "dataset=<0-2>"')
 
   filename = f"data/dataset0{dataset}/dataset0{dataset}.npy"
   v_t,w_t,timestamps,features,K_l,K_r,extL_T_imu,extR_T_imu = load_data(filename)
@@ -118,6 +118,7 @@ if __name__ == '__main__':
   slamLandmarksCovariance = landmarksCovariancePriorNoise * np.eye(3*numOfLandmarks)
   allCovariance[:numOfLandmarks*3, :numOfLandmarks*3] = slamLandmarksCovariance
   allCovariance[numOfLandmarks*3:, numOfLandmarks*3:] = intialPoseCovariance
+  seenTracker = np.zeros(numOfLandmarks, dtype=bool)
   for i in tqdm(range(len(tau))):
     
     # EKF Prediction
