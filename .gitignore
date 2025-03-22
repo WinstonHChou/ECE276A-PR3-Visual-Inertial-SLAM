@@ -179,3 +179,4 @@ cython_debug/
 **/dataset00/**
 **/dataset01/**
 **/dataset02/**
+*.docx
